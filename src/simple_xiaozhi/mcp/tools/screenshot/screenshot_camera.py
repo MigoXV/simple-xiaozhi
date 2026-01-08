@@ -3,8 +3,12 @@ Screenshot camera implementation for capturing desktop screens.
 """
 
 import io
-import sys
+import os
 import threading
+from datetime import datetime
+from pathlib import Path
+
+from PIL import ImageGrab
 
 from simple_xiaozhi.mcp.tools.camera.base_camera import BaseCamera
 from simple_xiaozhi.utils.logging_config import get_logger
@@ -16,6 +20,8 @@ class ScreenshotCamera(BaseCamera):
     """
     桌面截图摄像头实现.
     """
+
+    SCREENSHOT_DIR_ENV = "XIAOZHI_SCREENSHOT_DIR"
 
     _instance = None
     _lock = threading.Lock()
@@ -41,48 +47,14 @@ class ScreenshotCamera(BaseCamera):
         # 导入依赖库
         self._import_dependencies()
 
+
     def _import_dependencies(self):
         """
         导入必要的依赖库.
         """
-        # 检测 PIL 是否可用（避免未使用导入的告警）
-        try:
-            import importlib.util
+        self._pil_available = True
+        logger.info("PIL ImageGrab available for screenshot capture")
 
-            self._pil_available = importlib.util.find_spec("PIL.ImageGrab") is not None
-            if self._pil_available:
-                logger.info("PIL ImageGrab available for screenshot capture")
-            else:
-                logger.warning(
-                    "PIL not available, will try alternative screenshot methods"
-                )
-        except Exception:
-            self._pil_available = False
-            logger.warning(
-                "Failed to check PIL availability, fallback methods will be used"
-            )
-
-        # 平台特定导入
-        if sys.platform == "darwin":  # macOS
-            # 使用 which 检测系统 screencapture 命令是否可用
-            try:
-                import shutil
-
-                self._subprocess_available = shutil.which("screencapture") is not None
-                if self._subprocess_available:
-                    logger.info("screencapture command available for macOS screenshot")
-                else:
-                    logger.warning("screencapture command not found on macOS")
-            except Exception:
-                self._subprocess_available = False
-        elif sys.platform == "win32":  # Windows
-            try:
-                import ctypes
-
-                self._win32_available = hasattr(ctypes, "windll")
-                logger.info("Win32 API available for Windows screenshot")
-            except ImportError:
-                self._win32_available = False
 
     def capture(self, display_id=None) -> bool:
         """截取桌面画面.
@@ -96,36 +68,52 @@ class ScreenshotCamera(BaseCamera):
         try:
             logger.info("Starting desktop screenshot capture...")
 
-            # 尝试不同的截图方法
-            screenshot_data = None
+            if not self._pil_available:
+                logger.error(
+                    "PIL ImageGrab not available; screenshot capture requires Pillow"
+                )
+                return False
 
-            # 优先使用平台特定方法（更好的多显示器支持）
-            if sys.platform == "darwin" and getattr(
-                self, "_subprocess_available", False
-            ):
-                screenshot_data = self._capture_macos(display_id)
-            elif sys.platform == "win32" and getattr(self, "_win32_available", False):
-                screenshot_data = self._capture_windows(display_id)
-            elif sys.platform.startswith("linux"):
-                screenshot_data = self._capture_linux(display_id)
-
-            # 备用方法：使用PIL ImageGrab
-            if not screenshot_data and self._pil_available:
-                screenshot_data = self._capture_with_pil()
+            screenshot_data = self._capture_with_pil()
 
             if screenshot_data:
+                saved_path = self._save_screenshot(screenshot_data)
                 self.set_jpeg_data(screenshot_data)
                 logger.info(
-                    f"Screenshot captured successfully, size: {len(screenshot_data)} bytes"
+                    "Screenshot captured successfully, size: %s bytes, saved: %s",
+                    len(screenshot_data),
+                    saved_path,
                 )
                 return True
-            else:
-                logger.error("All screenshot capture methods failed")
-                return False
+
+            logger.error("PIL screenshot capture failed")
+            return False
 
         except Exception as e:
             logger.error(f"Error capturing screenshot: {e}", exc_info=True)
             return False
+
+    def _save_screenshot(self, screenshot_data: bytes) -> Path:
+        """保存截图到环境变量指定目录.
+
+        Returns:
+            保存后的文件路径
+        """
+        directory = os.getenv(self.SCREENSHOT_DIR_ENV,"data-bin/screenshots")
+        if not directory:
+            raise RuntimeError(
+                f"Environment variable {self.SCREENSHOT_DIR_ENV} is not set"
+            )
+
+        save_dir = Path(directory).expanduser().resolve()
+        save_dir.mkdir(parents=True, exist_ok=True)
+
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S_%f")
+        filename = f"screenshot_{timestamp}.jpg"
+        save_path = save_dir / filename
+        save_path.write_bytes(screenshot_data)
+
+        return save_path
 
     def _capture_with_pil(self) -> bytes:
         """使用PIL ImageGrab截图.
@@ -134,12 +122,10 @@ class ScreenshotCamera(BaseCamera):
             JPEG格式的图片字节数据
         """
         try:
-            import PIL.ImageGrab
-
             logger.debug("Capturing screenshot with PIL ImageGrab...")
 
             # 截取所有屏幕（包括多显示器）
-            screenshot = PIL.ImageGrab.grab(all_screens=True)
+            screenshot = ImageGrab.grab(all_screens=True)
 
             # 如果图片包含透明度通道(RGBA)，转换为RGB
             if screenshot.mode == "RGBA":

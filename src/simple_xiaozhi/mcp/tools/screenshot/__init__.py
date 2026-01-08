@@ -62,7 +62,7 @@ def take_screenshot(arguments: dict) -> str:
     if not success:
         logger.error("Failed to capture screenshot")
         return '{"success": false, "message": "Failed to capture screenshot"}'
-
-    # 分析截图
-    logger.info("Screenshot captured, starting analysis...")
-    return camera.analyze(question)
+    return '{"success": true, "message": "Screenshot captured successfully"}'
+    # # 分析截图
+    # logger.info("Screenshot captured, starting analysis...")
+    # return camera.analyze(question)
